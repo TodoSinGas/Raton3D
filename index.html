@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Laberinto 3D del Ratón con Enemigos</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+
+//Contenedor para el mensaje.
+<div id="message" style="
+  position: absolute;
+  top: 40%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 48px;
+  color: white;
+  background: rgba(0,0,0,0.7);
+  padding: 20px;
+  border-radius: 10px;
+  display: none;
+  text-align: center;
+">
+</div>
+
+<script>
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
+  const renderer = new THREE.WebGLRenderer();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  // Luz
+  const light = new THREE.PointLight(0xffffff, 1, 100);
+  light.position.set(10, 20, 10);
+  scene.add(light);
+
+  // Suelo
+  const floorGeometry = new THREE.PlaneGeometry(20, 20);
+  const floorMaterial = new THREE.MeshPhongMaterial({color: 0xaaaaaa});
+  const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+  floor.rotation.x = -Math.PI/2;
+  scene.add(floor);
+
+  // Muro alrededor del piso
+  const borderMaterial = new THREE.MeshPhongMaterial({color: 0x555555});
+  const borderThickness = 1;
+  const borderHeight = 2;
+  const borderLength = 20;
+
+  const northWall = new THREE.Mesh(new THREE.BoxGeometry(borderLength, borderHeight, borderThickness), borderMaterial);
+  northWall.position.set(0, borderHeight/2, -borderLength/2);
+  scene.add(northWall);
+
+  const southWall = new THREE.Mesh(new THREE.BoxGeometry(borderLength, borderHeight, borderThickness), borderMaterial);
+  southWall.position.set(0, borderHeight/2, borderLength/2);
+  scene.add(southWall);
+
+  const westWall = new THREE.Mesh(new THREE.BoxGeometry(borderThickness, borderHeight, borderLength), borderMaterial);
+  westWall.position.set(-borderLength/2, borderHeight/2, 0);
+  scene.add(westWall);
+
+  const eastWall = new THREE.Mesh(new THREE.BoxGeometry(borderThickness, borderHeight, borderLength), borderMaterial);
+  eastWall.position.set(borderLength/2, borderHeight/2, 0);
+  scene.add(eastWall);
+
+  // Ratón
+  const ratGeometry = new THREE.SphereGeometry(0.5, 32, 32);
+  const ratMaterial = new THREE.MeshPhongMaterial({color: 0xff0000});
+  const rat = new THREE.Mesh(ratGeometry, ratMaterial);
+  rat.position.set(-4, 0.5, -4);
+  scene.add(rat);
+
+  // Queso
+  const cheeseGeometry = new THREE.BoxGeometry(1,1,1);
+  const cheeseMaterial = new THREE.MeshPhongMaterial({color: 0xffff00});
+  const cheese = new THREE.Mesh(cheeseGeometry, cheeseMaterial);
+  cheese.position.set(4, 0.5, 4);
+  scene.add(cheese);
+
+  // Laberinto
+  const maze = [
+    "1111111111",
+    "1000000001",
+    "1011111101",
+    "1010000101",
+    "1010110101",
+    "1010100101",
+    "1010111101",
+    "1000000001",
+    "1111111111"
+  ];
+
+  const walls = [];
+  const wallMaterial = new THREE.MeshPhongMaterial({color: 0x333333});
+  for (let z = 0; z < maze.length; z++) {
+    for (let x = 0; x < maze[z].length; x++) {
+      if (maze[z][x] === "1") {
+        const wall = new THREE.Mesh(new THREE.BoxGeometry(1,2,1), wallMaterial);
+        wall.position.set(x-5,1,z-5);
+        scene.add(wall);
+        walls.push(wall);
+      }
+    }
+  }
+
+  // Enemigos
+  const enemies = [];
+  const enemyMaterial = new THREE.MeshPhongMaterial({color: 0x000000});
+
+  // Dos enemigos dentro del laberinto (patrullan)
+  const enemy1 = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 16), enemyMaterial);
+  enemy1.position.set(0, 0.5, 0);
+  scene.add(enemy1);
+  enemies.push({mesh: enemy1, type: "inside", dirX: 0.03, dirZ: 0});
+
+  const enemy2 = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 16), enemyMaterial);
+  enemy2.position.set(2, 0.5, -2);
+  scene.add(enemy2);
+  enemies.push({mesh: enemy2, type: "inside", dirX: 0, dirZ: 0.03});
+
+  // Dos enemigos fuera del laberinto (buscan al ratón)
+  const enemy3 = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 16), enemyMaterial);
+  enemy3.position.set(-8, 0.5, 8);
+  scene.add(enemy3);
+  enemies.push({mesh: enemy3, type: "outside"});
+
+  const enemy4 = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 16), enemyMaterial);
+  enemy4.position.set(8, 0.5, -8);
+  scene.add(enemy4);
+  enemies.push({mesh: enemy4, type: "outside"});
+
+  // Cámara fija
+  camera.position.set(0, 25, 25);
+  camera.lookAt(0, 0, 0);
+
+  // Variables de movimiento
+  let velocityY = 0;
+  const speed = 0.05;
+  const gravity = -0.01;
+  const jumpForce = 0.25;
+  let isOnGround = true;
+  let gameOver = false;
+
+  const keys = { forward:false, backward:false, left:false, right:false };
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowUp") keys.forward = true;
+    if (e.key === "ArrowDown") keys.backward = true;
+    if (e.key === "ArrowLeft") keys.left = true;
+    if (e.key === "ArrowRight") keys.right = true;
+    if (e.code === "Space" && isOnGround && !gameOver) {
+      velocityY = jumpForce;
+      isOnGround = false;
+    }
+    if (e.code === "Enter" && gameOver) {
+      // Reiniciar juego
+      rat.position.set(-4, 0.5, -4);
+      velocityY = 0;
+      isOnGround = true;
+      gameOver = false;
+
+if (e.code === "Enter" && gameOver) {
+  // Reiniciar ratón
+  rat.position.set(-4, 0.5, -4);
+  velocityY = 0;
+  isOnGround = true;
+
+  // Reiniciar enemigos
+  enemy1.position.set(0, 0.5, 0);
+  enemy2.position.set(2, 0.5, -2);
+  enemy3.position.set(-8, 0.5, 8);
+  enemy4.position.set(8, 0.5, -8);
+
+  // Reiniciar queso
+  cheese.position.set(4, 0.5, 4);
+
+  // Ocultar mensaje y reactivar juego
+  hideMessage();
+  gameOver = false;
+}
+
+    }
+  });
+
+  document.addEventListener("keyup", (e) => {
+    if (e.key === "ArrowUp") keys.forward = false;
+    if (e.key === "ArrowDown") keys.backward = false;
+    if (e.key === "ArrowLeft") keys.left = false;
+    if (e.key === "ArrowRight") keys.right = false;
+  });
+
+function showMessage(text) {
+  const msg = document.getElementById("message");
+  msg.innerText = text;
+  msg.style.display = "block";
+}
+
+function hideMessage() {
+  const msg = document.getElementById("message");
+  msg.style.display = "none";
+}
+
+  function animate() {
+    requestAnimationFrame(animate);
+if (gameOver) {
+  renderer.render(scene, camera);
+  return; // pausa la lógica, pero sigue mostrando la escena
+}
+
+    // Movimiento del ratón
+    let moveX = 0, moveZ = 0;
+    if (keys.forward) moveZ -= speed;
+    if (keys.backward) moveZ += speed;
+    if (keys.left) moveX -= speed;
+    if (keys.right) moveX += speed;
+
+    let newX = rat.position.x + moveX;
+    let newZ = rat.position.z + moveZ;
+
+    let collision = false;
+    for (let wall of walls) {
+      const dx = Math.abs(newX - wall.position.x);
+      const dz = Math.abs(newZ - wall.position.z);
+      const topY = wall.position.y + 1;
+      if (dx < 0.75 && dz < 0.75 && rat.position.y < topY - 0.1) {
+        collision = true;
+        break;
+      }
+    }
+
+    if (!collision) {
+      rat.position.x = newX;
+      rat.position.z = newZ;
+    }
+
+    // Gravedad y salto
+    rat.position.y += velocityY;
+    velocityY += gravity;
+
+    if (rat.position.y <= 0.5) {
+      rat.position.y = 0.5;
+      velocityY = 0;
+      isOnGround = true;
+    }
+
+    // Suelo en muros
+    for (let wall of walls) {
+      const dx = Math.abs(rat.position.x - wall.position.x);
+      const dz = Math.abs(rat.position.z - wall.position.z);
+      const topY = wall.position.y + 1;
+      if (dx < 0.5 && dz < 0.5) {
+        if (rat.position.y <= topY + 0.1 && velocityY <= 0) {
+          rat.position.y = topY;
+          velocityY = 0;
+          isOnGround = true;
+        }
+      }
+    }
+
+    // Movimiento de enemigos
+    for (let enemy of enemies) {
+      if (enemy.type === "inside") {
+        // Patrulla simple dentro del laberinto
+        enemy.mesh.position.x += enemy.dirX;
+        enemy.mesh.position.z += enemy.dirZ;
+        // Rebote en límites
+        if (enemy.mesh.position.x > 4 || enemy.mesh.position.x < -4) enemy.dirX *= -1;
+        if (enemy.mesh.position.z > 4 || enemy.mesh.position.z < -4) enemy.dirZ *= -1;
+      } else if (enemy.type === "outside") {
+        // Enemigos fuera buscan al ratón
+        const dx = rat.position.x - enemy.mesh.position.x;
+        const dz = rat.position.z - enemy.mesh.position.z;
+        const dist = Math.sqrt(dx*dx + dz*dz);
+        if (dist > 0.1) {
+          enemy.mesh.position.x += (dx/dist) * 0.02; // velocidad hacia el ratón
+          enemy.mesh.position.z += (dz/dist) * 0.02;
+        }
+      }
+
+      // Colisión con ratón
+      const distToRat = rat.position.distanceTo(enemy.mesh.position);
+      if (distToRat < 0.8) {
+        showMessage("¡Game Over! Presiona [F5=Reiniciar] 🕹️");
+        gameOver = true;
+      }
+    }
+
+    // Victoria
+    if (rat.position.distanceTo(cheese.position) < 1) {
+      showMessage("¡Ganaste! El ratón encontró su queso 🧀 [F5=Reiniciar] 🕹️");
+      gameOver = true;
+    }
+
+    renderer.render(scene, camera);
+  }
+  animate();
+</script>
+</body>
+</html>
