@@ -1,2 +1,2 @@
 # Raton3D
-Ratón de gastos y busca queso
+Ratón escapa de gastos y busca queso.
